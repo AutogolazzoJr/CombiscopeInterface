@@ -1,14 +1,31 @@
-package com.autogolazzojr.combiscope;
-
 import java.io.IOException;
-
 import com.fazecast.jSerialComm.SerialPort;
 
 public class Combiscope {
 	private SerialPort sp;
 	private String ScopeID = "";
 	private short[] previousWaveform = new short[32768];
-	private static int frontPanelState = 0;
+	private int frontPanelState = 0;
+	private int baudRate;
+	private int bits;
+	private int stopBits;
+	private int parity;
+	public byte[] traceName;
+	public byte[] yUnit;
+	public byte[] xUnit;
+	public byte[] yZero;
+	public byte[] xZero;
+	public byte[] yResolution;
+	public byte[] xResolution;
+	public byte[] yRange;
+	public byte[] date;
+	public byte[] time;
+	public byte[] dtCorr;
+	public byte[] minMax;
+	public byte[] multiShotTot;
+	public byte[] multiShotNr;
+	//public byte[] r1;
+	//public byte[] r2;
 
 	/**
 	 * Instantiates a Combiscope object used for interfacing with a Phillips/Fluke
@@ -20,11 +37,71 @@ public class Combiscope {
 	 * @param parity   serial parity (usually 0)
 	 */
 	public Combiscope(int baudRate, int bits, int stopBits, int parity) {
-		sp = SerialPort.getCommPorts()[0];
+		this.baudRate = baudRate;
+		this.bits = bits;
+		this.stopBits = stopBits;
+		this.parity = parity;
+		/*-
+		SerialPort[] ports = SerialPort.getCommPorts();
+		sp = ports[ports.length - 1];
 		sp.openPort(1000, 4096, 80000);
 		sp.setComPortParameters(baudRate, bits, stopBits, parity);
 		sp.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, 1000, 0);
 		this.updateInfo();
+		*/
+	}
+
+	/**
+	 * Returns the available COM ports. Available ports may change, so it is
+	 * recommended that this method is called right before opening a port.
+	 * 
+	 * @return a SerialPort array consisting of available COM ports.
+	 */
+	public static SerialPort[] getPorts() {
+		return SerialPort.getCommPorts();
+	}
+
+	/**
+	 * Connects to the Combiscope via the port at the specified index. The index can
+	 * and should be found with getPorts().
+	 * 
+	 * @param index the index of the COM port.
+	 */
+	public void openPort(int index) {
+		sp = getPorts()[index];
+		sp.openPort(1000, 4096, 80000);
+		sp.setComPortParameters(baudRate, bits, stopBits, parity);
+		sp.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, 1000, 0);
+		this.updateInfo();
+	}
+
+	/**
+	 * Disconnects from the Combiscope, and closes the serial port.
+	 */
+	public void closePort() {
+		if (sp == null)
+			return;
+		sp.closePort();
+	}
+
+	/**
+	 * Instantiates a Combiscope object used for interfacing with a Phillips/Fluke
+	 * Combiscope. This is done using the jSerialComm library. The Combiscope is set
+	 * up with a baud rate of 9600, 8 serial bits, 1 stop bit, and a parity of 0.
+	 */
+	public Combiscope() {
+		this(9600);
+	}
+
+	/**
+	 * Instantiates a Combiscope object used for interfacing with a Phillips/Fluke
+	 * Combiscope. This is done using the jSerialComm library. The Combiscope is set
+	 * up with 8 serial bits, 1 stop bit, and a parity of 0.
+	 * 
+	 * @param baudRate Serial baud rate (Often 9600)
+	 */
+	public Combiscope(int baudRate) {
+		this(baudRate, 8, 1, 0);
 	}
 
 	private boolean runCommand(byte[] command) {
@@ -38,7 +115,7 @@ public class Combiscope {
 		}
 		long start = System.nanoTime();
 		while (sp.bytesAvailable() < 2) {
-			if ((System.nanoTime() - start) / 1000000 >= 10000)
+			if ((System.nanoTime() - start) / 1000000 >= 5000)
 				return false;
 		}
 		return true;
@@ -52,7 +129,10 @@ public class Combiscope {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
+		long start = System.nanoTime();
 		while (sp.bytesAvailable() <= 3) {
+			if ((System.nanoTime() - start) / 1000000 >= 5000)
+				return new byte[] {};
 		}
 		int currentBytes;
 		int lastBytes;
@@ -67,7 +147,7 @@ public class Combiscope {
 		} while (currentBytes > lastBytes);
 
 		byte[] inputBuffer = new byte[sp.bytesAvailable()];
-		sp.readBytes(inputBuffer, sp.bytesAvailable());// */
+		sp.readBytes(inputBuffer, sp.bytesAvailable());
 		return inputBuffer;
 	}
 
@@ -86,7 +166,9 @@ public class Combiscope {
 	 * @return True if the port is open, and false if it is not.
 	 */
 	public boolean isOpen() {
-		return sp.openPort(1000, 4096, 80000);
+		if (sp == null)
+			return false;
+		return sp.isOpen();
 	}
 
 	/**
@@ -146,7 +228,7 @@ public class Combiscope {
 	/**
 	 * Resets all the software on the oscilloscope. Settings remain the same. The
 	 * interface parameters aren't changed so the communication will stay alive.
-	 * WARNING: I haven't tested this command. There is NO front panel equivalent
+	 * WARNING: I haven't tested this. There is NO front panel equivalent
 	 * for this command.
 	 */
 	public void resetInstrument() {
@@ -204,8 +286,9 @@ public class Combiscope {
 	}
 
 	/**
-	 * Returns an array of 16-bit signed integers representing a waveform. NOTE:
-	 * Works on all acquisition lengths!
+	 * Returns an array of 16-bit signed integers representing a waveform. Also
+	 * updates information about the waveform. NOTE: Works on all acquisition
+	 * lengths!
 	 * 
 	 * @param channel        Channel to read from.
 	 * @param memoryRegister Memory register to read from. 0 will read from the
@@ -218,13 +301,113 @@ public class Combiscope {
 		int counter = 0;
 		int startIndex = 0;
 		int acquisitionLengthIndex = 0;
+		int lastComma = -1;
 		for (int i = 0; i < input.length; i++) {
 			if (input[i] == 0x2c) {
 				counter++;
-				if (counter == 16) {
+				switch (counter) {
+				case 1:
+					traceName = new byte[i - lastComma - 1 - 2];
+					for (int k = 0; k < traceName.length; k++) {
+						traceName[k] = input[k + lastComma + 1 + 2];
+					}
+					lastComma = i;
+					break;
+				case 2:
+					yUnit = new byte[i - lastComma - 1];
+					for (int k = 0; k < yUnit.length; k++) {
+						yUnit[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 3:
+					xUnit = new byte[i - lastComma - 1];
+					for (int k = 0; k < xUnit.length; k++) {
+						xUnit[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 4:
+					yZero = new byte[i - lastComma - 1];
+					for (int k = 0; k < yZero.length; k++) {
+						yZero[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 5:
+					xZero = new byte[i - lastComma - 1];
+					for (int k = 0; k < xZero.length; k++) {
+						xZero[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 6:
+					yResolution = new byte[i - lastComma - 1];
+					for (int k = 0; k < yResolution.length; k++) {
+						yResolution[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 7:
+					xResolution = new byte[i - lastComma - 1];
+					for (int k = 0; k < xResolution.length; k++) {
+						xResolution[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 8:
+					yRange = new byte[i - lastComma - 1];
+					for (int k = 0; k < yRange.length; k++) {
+						yRange[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 9:
+					date = new byte[i - lastComma - 1];
+					for (int k = 0; k < date.length; k++) {
+						date[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 10:
+					time = new byte[i - lastComma - 1];
+					for (int k = 0; k < time.length; k++) {
+						time[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 11:
+					dtCorr = new byte[i - lastComma - 1];
+					for (int k = 0; k < dtCorr.length; k++) {
+						dtCorr[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 12:
+					minMax = new byte[i - lastComma - 1];
+					for (int k = 0; k < minMax.length; k++) {
+						minMax[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 13:
+					multiShotTot = new byte[i - lastComma - 1];
+					for (int k = 0; k < multiShotTot.length; k++) {
+						multiShotTot[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 14:
+					multiShotNr = new byte[i - lastComma - 1];
+					for (int k = 0; k < multiShotNr.length; k++) {
+						multiShotNr[k] = input[k + lastComma + 1];
+					}
+					lastComma = i;
+					break;
+				case 16:
 					acquisitionLengthIndex = i;
-				}
-				if (counter == 17) {
+					break;
+				case 17:
 					startIndex = i;
 					break;
 				}
@@ -235,8 +418,6 @@ public class Combiscope {
 			acqString += (char) input[i];
 		short[] samples = new short[(input.length - startIndex - 2) / 2];
 		if (samples.length != Integer.parseInt(acqString)) {
-			// System.out.println("Waveform acquisition failed. Displaying previous
-			// acquisition.");
 			return previousWaveform;
 		}
 		counter = 0;
@@ -280,5 +461,19 @@ public class Combiscope {
 		for (int i = 0; i < input.length; i++)
 			setup[i + 3] = input[i];
 		runCommand(setup);
+	}
+
+	public String getTraceName() {
+		String output = "";
+		for (int i = 0; i < traceName.length; i++)
+			output += (char) traceName[i];
+		return output;
+	}
+
+	public String getYUnit() {
+		String output = "";
+		for (int i = 0; i < yUnit.length; i++)
+			output += (char) yUnit[i];
+		return output;
 	}
 }
